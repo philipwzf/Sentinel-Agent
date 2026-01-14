@@ -16,13 +16,14 @@ RUN mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix
 
 RUN adduser agent
-USER agent
 WORKDIR /home/agent
 
-COPY pyproject.toml uv.lock README.md startx.py ./
-COPY src src
-COPY SENTINEL_code SENTINEL_code
-COPY examples examples
+COPY --chown=agent:agent pyproject.toml uv.lock README.md startx.py ./
+COPY --chown=agent:agent src src
+COPY --chown=agent:agent SENTINEL_code SENTINEL_code
+COPY --chown=agent:agent examples examples
+
+USER agent
 
 RUN \
     --mount=type=cache,target=/home/agent/.cache/uv,uid=1000 \
