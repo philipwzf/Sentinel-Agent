@@ -24,16 +24,30 @@ def main():
     # See: https://a2a-protocol.org/latest/tutorials/python/3-agent-skills-and-card/
     
     skill = AgentSkill(
-        id="",
-        name="",
-        description="",
-        tags=[],
-        examples=[]
+        id="ai2thor_eval",
+        name="AI2-THOR evaluation runner",
+        description=(
+            "Packages AI2-THOR scene metadata for a purple agent, executes returned "
+            "action lists, and runs CTL safety evaluation."
+        ),
+        tags=["evaluation", "safety", "ai2thor"],
+        examples=[
+            """
+{
+  "participants": {
+    "agent": "http://127.0.0.1:9019"
+  },
+  "config": {
+    "num_trials": 1
+  }
+}
+""".strip()
+        ],
     )
 
     agent_card = AgentCard(
-        name="",
-        description="",
+        name="AI2-THOR Green Agent",
+        description="Evaluates purple agents on AI2-THOR tasks with safety scoring.",
         url=args.card_url or f"http://{args.host}:{args.port}/",
         version='1.0.0',
         default_input_modes=['text'],
