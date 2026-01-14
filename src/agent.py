@@ -398,7 +398,7 @@ class Agent:
         )
 
         trial_specs: list[TrialSpec] = []
-        env = self.ThorEnv(headless=True)
+        env = self.ThorEnv()
         try:
             for idx, trial_data in enumerate(trials, start=1):
                 trial_id = str(trial_data.get("task_id") or f"trial_{idx}")
