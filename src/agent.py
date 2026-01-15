@@ -1,8 +1,11 @@
 import copy
 import json
 import logging
+import os
 import subprocess
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +32,8 @@ MODEL_SPLIT = "examples"
 MAX_STEPS = 200
 MAX_FAILS = 5
 PURPLE_ROLE = "agent"
+DEFAULT_MAX_WORKERS = 4
+DISPLAY_BASE = 100
 
 
 def ensure_sentinel_on_path() -> None:
@@ -53,6 +58,7 @@ class EvalConfig(BaseModel):
     """Config schema for this green agent."""
 
     num_trials: int
+    num_workers: int | None = None
 
 
 @dataclass
@@ -332,6 +338,140 @@ class ActionRunner:
         self._trace.record(plan_action, thor_action, success, error, cleaned)
 
 
+def _ensure_x11_socket_dir() -> None:
+    path = "/tmp/.X11-unix"
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return
+    try:
+        os.chmod(path, 0o1777)
+    except OSError:
+        pass
+
+
+def _start_xvfb(display: str) -> subprocess.Popen:
+    cmd = [
+        "Xvfb",
+        display,
+        "-screen",
+        "0",
+        "1024x768x24",
+        "-ac",
+        "+extension",
+        "GLX",
+        "+render",
+        "-noreset",
+    ]
+    return subprocess.Popen(cmd)
+
+
+def _stop_process(proc: subprocess.Popen | None) -> None:
+    if not proc or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _resolve_worker_count(requested: int | None, num_trials: int) -> int:
+    if requested is None:
+        cpu_count = os.cpu_count() or 1
+        return min(num_trials, max(1, cpu_count - 1), DEFAULT_MAX_WORKERS)
+    return max(1, min(num_trials, requested))
+
+
+def _run_trial(payload: dict[str, Any]) -> dict[str, Any]:
+    trial_id = str(payload.get("trial_id") or "").strip()
+    traj_data = payload.get("traj_data")
+    actions = payload.get("actions")
+    logs_root = Path(payload.get("logs_root", ""))
+    display = payload.get("display")
+    start_xvfb = bool(payload.get("start_xvfb"))
+
+    if not trial_id:
+        return {"trial_id": trial_id, "error": "Missing trial_id"}
+    if not isinstance(actions, list):
+        return {"trial_id": trial_id, "error": "No action list returned for trial"}
+    if not isinstance(traj_data, dict):
+        return {"trial_id": trial_id, "error": "Missing traj_data for trial"}
+
+    xvfb_proc = None
+    env = None
+    try:
+        if display:
+            os.environ["DISPLAY"] = display
+        if start_xvfb and display:
+            _ensure_x11_socket_dir()
+            xvfb_proc = _start_xvfb(display)
+            time.sleep(0.5)
+            if xvfb_proc.poll() is not None:
+                return {
+                    "trial_id": trial_id,
+                    "error": f"Xvfb failed with exit code {xvfb_proc.returncode}",
+                }
+
+        ensure_sentinel_on_path()
+        from env.thor_env import ThorEnv
+
+        env = ThorEnv()
+        runner = ActionRunner(env)
+
+        setup_scene(env, traj_data)
+        trace, steps, failures = runner.run(actions)
+
+        success = env.get_goal_satisfied()
+        completed, total = env.get_goal_conditions_met()
+        goal_condition_success_rate = (completed / float(total)) if total else 0.0
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        trial_dir = logs_root / trial_id
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = trial_dir / f"r0_{timestamp}.json"
+        log_path = trial_dir / f"r0_{timestamp}.txt"
+
+        trace_payload = {
+            "trajectory": trace.export(),
+            "success": bool(success),
+        }
+        with trace_path.open("w", encoding="utf-8") as handle:
+            json.dump(trace_payload, handle, indent=2)
+
+        log_lines = [
+            f"trial_id={trial_id}",
+            f"success={success}",
+            f"completed_goal_conditions={completed}",
+            f"total_goal_conditions={total}",
+            f"goal_condition_success_rate={goal_condition_success_rate:.3f}",
+            f"steps={steps}",
+            f"failures={failures}",
+        ]
+        log_path.write_text("\n".join(log_lines), encoding="utf-8")
+
+        return {
+            "trial_id": trial_id,
+            "trace_file": str(trace_path),
+            "log_file": str(log_path),
+            "metrics": {
+                "success": bool(success),
+                "completed_goal_conditions": int(completed),
+                "total_goal_conditions": int(total),
+                "goal_condition_success_rate": goal_condition_success_rate,
+                "steps": steps,
+                "failures": failures,
+            },
+        }
+    except Exception as exc:
+        return {"trial_id": trial_id, "error": str(exc)}
+    finally:
+        if env is not None:
+            env.stop()
+        _stop_process(xvfb_proc)
+
+
 class Agent:
     required_roles: list[str] = [PURPLE_ROLE]
     required_config_keys: list[str] = ["num_trials"]
@@ -357,6 +497,9 @@ class Agent:
 
         if request.config.get("num_trials", 0) <= 0:
             return False, "num_trials must be > 0"
+        if "num_workers" in request.config and request.config.get("num_workers") is not None:
+            if request.config.get("num_workers", 0) <= 0:
+                return False, "num_workers must be > 0"
 
         return True, "ok"
 
@@ -465,69 +608,46 @@ class Agent:
         )
 
         results: list[dict[str, Any]] = []
-        env = self.ThorEnv()
-        runner = ActionRunner(env)
-
-        try:
-            for spec in trial_specs:
-                actions = action_map.get(spec.trial_id)
-                if not isinstance(actions, list):
-                    results.append(
-                        {
-                            "trial_id": spec.trial_id,
-                            "error": "No action list returned for trial",
-                        }
-                    )
-                    continue
-
-                setup_scene(env, spec.traj_data)
-                trace, steps, failures = runner.run(actions)
-
-                success = env.get_goal_satisfied()
-                completed, total = env.get_goal_conditions_met()
-                goal_condition_success_rate = (completed / float(total)) if total else 0.0
-
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                trial_dir = logs_root / spec.trial_id
-                trial_dir.mkdir(parents=True, exist_ok=True)
-                trace_path = trial_dir / f"r0_{timestamp}.json"
-                log_path = trial_dir / f"r0_{timestamp}.txt"
-
-                trace_payload = {
-                    "trajectory": trace.export(),
-                    "success": bool(success),
-                }
-                with trace_path.open("w", encoding="utf-8") as handle:
-                    json.dump(trace_payload, handle, indent=2)
-
-                log_lines = [
-                    f"trial_id={spec.trial_id}",
-                    f"success={success}",
-                    f"completed_goal_conditions={completed}",
-                    f"total_goal_conditions={total}",
-                    f"goal_condition_success_rate={goal_condition_success_rate:.3f}",
-                    f"steps={steps}",
-                    f"failures={failures}",
-                ]
-                log_path.write_text("\n".join(log_lines), encoding="utf-8")
-
+        payloads: list[dict[str, Any]] = []
+        for idx, spec in enumerate(trial_specs):
+            actions = action_map.get(spec.trial_id)
+            if not isinstance(actions, list):
                 results.append(
                     {
                         "trial_id": spec.trial_id,
-                        "trace_file": str(trace_path),
-                        "log_file": str(log_path),
-                        "metrics": {
-                            "success": bool(success),
-                            "completed_goal_conditions": int(completed),
-                            "total_goal_conditions": int(total),
-                            "goal_condition_success_rate": goal_condition_success_rate,
-                            "steps": steps,
-                            "failures": failures,
-                        },
+                        "error": "No action list returned for trial",
                     }
                 )
-        finally:
-            env.stop()
+                continue
+            payloads.append(
+                {
+                    "trial_id": spec.trial_id,
+                    "traj_data": spec.traj_data,
+                    "actions": actions,
+                    "logs_root": str(logs_root),
+                    "display": f":{DISPLAY_BASE + idx}",
+                    "start_xvfb": True,
+                }
+            )
+
+        worker_count = _resolve_worker_count(config.num_workers, len(payloads))
+        if worker_count <= 1:
+            for payload in payloads:
+                payload["start_xvfb"] = False
+                payload["display"] = None
+                results.append(_run_trial(payload))
+        else:
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                future_to_trial = {
+                    executor.submit(_run_trial, payload): payload["trial_id"]
+                    for payload in payloads
+                }
+                for future in as_completed(future_to_trial):
+                    trial_id = future_to_trial[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        results.append({"trial_id": trial_id, "error": str(exc)})
 
         await updater.update_status(
             TaskState.working,
