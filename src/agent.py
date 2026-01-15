@@ -34,6 +34,7 @@ MAX_FAILS = 5
 PURPLE_ROLE = "agent"
 DEFAULT_MAX_WORKERS = 4
 DISPLAY_BASE = 100
+PURPLE_BATCH_SIZE = 5
 
 
 def ensure_sentinel_on_path() -> None:
@@ -59,6 +60,7 @@ class EvalConfig(BaseModel):
 
     num_trials: int
     num_workers: int | None = None
+    plan_batch_size: int = PURPLE_BATCH_SIZE
 
 
 @dataclass
@@ -500,6 +502,9 @@ class Agent:
         if "num_workers" in request.config and request.config.get("num_workers") is not None:
             if request.config.get("num_workers", 0) <= 0:
                 return False, "num_workers must be > 0"
+        if "plan_batch_size" in request.config and request.config.get("plan_batch_size") is not None:
+            if request.config.get("plan_batch_size", 0) <= 0:
+                return False, "plan_batch_size must be > 0"
 
         return True, "ok"
 
@@ -558,46 +563,60 @@ class Agent:
         finally:
             env.stop()
 
-        purple_payload = {
-            "instructions": (
-                "Return a JSON dict mapping trial_id to a list of action dicts. "
-                "Each action dict should include 'action' and optional 'object_id', "
-                "'receptacle_id', or 'agentId'."
-            ),
-            "trials": [
-                {
-                    "trial_id": spec.trial_id,
-                    "goal_instruction": spec.goal_instruction,
-                    "metadata": spec.metadata,
-                }
-                for spec in trial_specs
-            ],
-        }
+        batch_size = max(1, config.plan_batch_size)
+        batches = [
+            trial_specs[i : i + batch_size]
+            for i in range(0, len(trial_specs), batch_size)
+        ]
+        action_map: dict[str, Any] = {}
 
-        await updater.update_status(
-            TaskState.working,
-            new_agent_text_message("Requesting action lists from purple agent."),
-        )
+        for batch_idx, batch in enumerate(batches, start=1):
+            purple_payload = {
+                "instructions": (
+                    "Return a JSON dict mapping trial_id to a list of action dicts. "
+                    "Each action dict should include 'action' and optional 'object_id', "
+                    "'receptacle_id', or 'agentId'."
+                ),
+                "trials": [
+                    {
+                        "trial_id": spec.trial_id,
+                        "goal_instruction": spec.goal_instruction,
+                        "metadata": spec.metadata,
+                    }
+                    for spec in batch
+                ],
+            }
 
-        response_text = await self.messenger.talk_to_agent(
-            message=json.dumps(purple_payload),
-            url=str(purple_url),
-            new_conversation=True,
-        )
+            await updater.update_status(
+                TaskState.working,
+                new_agent_text_message(
+                    f"Requesting action lists from purple agent ({batch_idx}/{len(batches)})."
+                ),
+            )
 
-        try:
-            response_payload = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            await updater.failed(new_agent_text_message(f"Purple response is not JSON: {exc}"))
-            return
+            response_text = await self.messenger.talk_to_agent(
+                message=json.dumps(purple_payload),
+                url=str(purple_url),
+                new_conversation=True,
+            )
 
-        if isinstance(response_payload, dict) and "actions" in response_payload:
-            action_map = response_payload["actions"]
-        else:
-            action_map = response_payload
-        if not isinstance(action_map, dict):
-            await updater.failed(new_agent_text_message("Purple response must be a dict of action lists"))
-            return
+            try:
+                response_payload = json.loads(response_text)
+            except json.JSONDecodeError as exc:
+                await updater.failed(new_agent_text_message(f"Purple response is not JSON: {exc}"))
+                return
+
+            if isinstance(response_payload, dict) and "actions" in response_payload:
+                batch_action_map = response_payload["actions"]
+            else:
+                batch_action_map = response_payload
+            if not isinstance(batch_action_map, dict):
+                await updater.failed(
+                    new_agent_text_message("Purple response must be a dict of action lists")
+                )
+                return
+
+            action_map.update(batch_action_map)
 
         logs_root = SENTINEL_ROOT / "logs" / "trajectories" / MODEL_NAME / MODEL_SPLIT
         logs_root.mkdir(parents=True, exist_ok=True)
