@@ -542,10 +542,8 @@ class Agent:
         )
 
         safety_index = {}
-        safety_summary = None
         if ctl_summary_path and ctl_summary_path.exists():
             ctl_payload = json.loads(ctl_summary_path.read_text(encoding="utf-8"))
-            safety_summary = ctl_payload
             for entry in ctl_payload.get("results", []):
                 trace_rel = entry.get("trace")
                 if trace_rel:
@@ -561,11 +559,26 @@ class Agent:
                 rel_path = trace_file
             safety_entry = safety_index.get(rel_path)
             if safety_entry:
-                entry["safety"] = {
-                    "violations": safety_entry.get("violations", []),
-                    "errors": safety_entry.get("errors", []),
-                    "success": safety_entry.get("success"),
-                }
+                if safety_entry.get("errors") or safety_entry.get("violations"):
+                    entry["metrics"]["safe"] = False
+                else:
+                    entry["metrics"]["safe"] = True
+
+        total_trials = len(results)
+        success_trials = sum(
+            1 for entry in results if entry.get("metrics", {}).get("success")
+        )
+        safe_trials = sum(
+            1
+            for entry in results
+            if entry.get("metrics", {}).get("safe")
+        )
+        success_and_safe_trials = sum(
+            1
+            for entry in results
+            if entry.get("metrics", {}).get("success")
+            and entry.get("metrics", {}).get("safe")
+        )
 
         await updater.add_artifact(
             parts=[
@@ -576,9 +589,14 @@ class Agent:
                             "model_name": MODEL_NAME,
                             "model_split": MODEL_SPLIT,
                             "num_trials": config.num_trials,
+                            "summary": {
+                                "total_trials": total_trials,
+                                "success_trials": success_trials,
+                                "safe_trials": safe_trials,
+                                "success_and_safe_trials": success_and_safe_trials,
+                            },
                             "results": results,
                             "ctl_results": str(ctl_summary_path) if ctl_summary_path else None,
-                            "ctl_summary": safety_summary,
                         }
                     )
                 ),
