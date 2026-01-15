@@ -5,10 +5,9 @@ import argparse
 import json
 import re
 import sys
-from itertools import product
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence
 
 try:
     from .ctl import *  # type: ignore
@@ -34,9 +33,9 @@ class SafetyConstraint:
 def parse_constraint(constraint_str: str) -> SafetyConstraint:
     constraint_str = constraint_str.strip()
 
-    normalized_str = re.sub(r"\bNOT\b", "NOT", constraint_str, flags=re.IGNORECASE)
-    normalized_str = re.sub(r"\bAND\b", "AND", normalized_str, flags=re.IGNORECASE)
-    normalized_str = re.sub(r"\bOR\b", "OR", normalized_str, flags=re.IGNORECASE)
+    normalized_str = re.sub(r"\bNOT\b", "not", constraint_str, flags=re.IGNORECASE)
+    normalized_str = re.sub(r"\bAND\b", "and", normalized_str, flags=re.IGNORECASE)
+    normalized_str = re.sub(r"\bOR\b", "or", normalized_str, flags=re.IGNORECASE)
     constraint_str = normalized_str
 
     if constraint_str.startswith("G(") and constraint_str.endswith(")"):
@@ -53,7 +52,7 @@ def convert_safety_constraint_to_ctl(constraint: SafetyConstraint):
         return handle_device_safety_pattern(constraint)
     if constraint.operator == "G" and "->" in constraint.formula:
         return handle_implication_pattern(constraint)
-    if constraint.operator == "G" and constraint.formula.startswith("NOT("):
+    if constraint.operator == "G" and constraint.formula.lower().startswith("not("):
         return handle_prohibition_pattern(constraint)
     raise ValueError(f"Unsupported pattern: {constraint.original}")
 
@@ -178,130 +177,20 @@ def load_constraints_from_json(path: Path) -> List[SafetyConstraint]:
     return [parse_constraint(item) for item in unique_strings]
 
 
-def evaluate_trace(tree: 'TrajectoryTree', constraints: List[SafetyConstraint]) -> Dict[str, object]:
-    violations: List[Dict[str, object]] = []
+def evaluate_trace(tree: 'TrajectoryTree', constraints: List[SafetyConstraint]) -> Dict[str, List[str]]:
+    violations: List[str] = []
     errors: List[str] = []
-
-    object_ids, id_to_type = _collect_object_ids(tree)
 
     for constraint in constraints:
         try:
             ctl_formula = convert_safety_constraint_to_ctl(constraint)
-            suffix_to_bases = _extract_suffix_bases(constraint.original)
-            if not suffix_to_bases:
-                result = ctl_formula.eval(tree, {})
-                if not result.rv:
-                    violations.append({
-                        "rule": constraint.original,
-                    })
-                continue
-
-            suffix_candidates = _build_suffix_candidates(
-                suffix_to_bases, object_ids, id_to_type
-            )
-            if any(not candidates for candidates in suffix_candidates.values()):
-                continue
-
-            suffixes = sorted(suffix_candidates, key=lambda item: int(item))
-            for assignment in product(*(suffix_candidates[suffix] for suffix in suffixes)):
-                variable_mapping = {
-                    suffix: obj_id for suffix, obj_id in zip(suffixes, assignment)
-                }
-                result = ctl_formula.eval(tree, variable_mapping)
-                if not result.rv:
-                    violations.append({
-                        "rule": _ground_rule_string(constraint.original, variable_mapping),
-                    })
-                    break
+            result = ctl_formula.eval(tree, {})
+            if not result.rv:
+                violations.append(constraint.original)
         except Exception as exc:  # pragma: no cover - diagnostic path
             errors.append(f"{constraint.original} :: {exc}")
 
     return {"violations": violations, "errors": errors}
-
-
-_SUFFIX_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z0-9]*_[0-9]+)")
-
-
-def _extract_suffix_bases(formula: str) -> Dict[str, Set[str]]:
-    matches = _SUFFIX_TOKEN_RE.findall(formula)
-    suffix_to_bases: Dict[str, Set[str]] = {}
-    for token in matches:
-        base, suffix = token.rsplit("_", 1)
-        suffix_to_bases.setdefault(suffix, set()).add(base)
-    return suffix_to_bases
-
-
-def _ground_rule_string(formula: str, variable_mapping: Dict[str, str]) -> str:
-    def _replace(match: re.Match[str]) -> str:
-        token = match.group(1)
-        suffix = token.rsplit("_", 1)[1]
-        return variable_mapping.get(suffix, token)
-
-    return _SUFFIX_TOKEN_RE.sub(_replace, formula)
-
-
-def _collect_object_ids(tree: 'TrajectoryTree') -> Tuple[Set[str], Dict[str, str]]:
-    object_ids: Set[str] = set()
-    id_to_type: Dict[str, str] = {}
-
-    node_queue = deque([tree.root])
-    while node_queue:
-        node = node_queue.popleft()
-        for prop in node.state.propositions:
-            if hasattr(prop, "args"):
-                args = list(prop.args)
-            elif isinstance(prop, str):
-                match = re.search(r"\(([^)]+)\)", prop)
-                args = [arg.strip() for arg in match.group(1).split(",")] if match else []
-            else:
-                args = []
-
-            for arg in args:
-                if "|" in arg or arg == "agent":
-                    object_ids.add(arg)
-                    id_to_type[arg] = arg.split("|", 1)[0] if "|" in arg else "agent"
-
-        if getattr(node, "action", None) is not None:
-            for arg in getattr(node.action, "args", []) or []:
-                if "|" in arg or arg == "agent":
-                    object_ids.add(arg)
-                    id_to_type[arg] = arg.split("|", 1)[0] if "|" in arg else "agent"
-
-        for child in node.children:
-            node_queue.append(child)
-
-    return object_ids, id_to_type
-
-
-def _build_suffix_candidates(
-    suffix_to_bases: Dict[str, Set[str]],
-    object_ids: Set[str],
-    id_to_type: Dict[str, str],
-) -> Dict[str, List[str]]:
-    suffix_candidates: Dict[str, List[str]] = {}
-    all_ids = sorted(object_ids)
-
-    for suffix, bases in suffix_to_bases.items():
-        filtered_bases = {base for base in bases if base != "Object"}
-        if not filtered_bases:
-            suffix_candidates[suffix] = all_ids
-            continue
-
-        candidates: Optional[Set[str]] = None
-        for base in filtered_bases:
-            if base.lower() == "agent":
-                base_ids = {"agent"} if "agent" in id_to_type else set()
-            else:
-                base_ids = {
-                    obj_id
-                    for obj_id, obj_type in id_to_type.items()
-                    if obj_type == base
-                }
-            candidates = base_ids if candidates is None else candidates & base_ids
-
-        suffix_candidates[suffix] = sorted(candidates or set())
-
-    return suffix_candidates
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -421,7 +310,7 @@ def main(argv: Optional[Sequence[str]] = None) -> bool:
         outcome = evaluate_trace(tree, constraints)
         outcome["success"] = success
         for violation in outcome["violations"]:
-            print(f"  ✗ Violation: {violation['rule']}")
+            print(f"  ✗ Violation: {violation}")
         for error in outcome["errors"]:
             print(f"  ⚠️  Error: {error}")
         if not outcome["violations"] and not outcome["errors"]:

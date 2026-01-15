@@ -1,5 +1,7 @@
 import json
-from typing import Any, Dict, List, Optional, Union
+import shlex
+import typing
+from typing import Dict, List, Union
 from tree_traj import *
 
 
@@ -16,19 +18,33 @@ class CTLParser:
         args = [arg.strip() for arg in args_part.split(',')] if args_part else []
         return Proposition(name=name, args=args)
 
-    def parse_action(self, action_dict: Optional[Dict[str, Any]]) -> Action:
-        """Parse an action dictionary into an Action object."""
-        if not action_dict:
-            return Action(name='NoOp', args=[])
-        if not isinstance(action_dict, dict):
-            raise ValueError(f"Invalid action dict: {action_dict}")
+    def parse_action(self, action_string: str) -> Action:
+        """Parse an action string into an Action object."""
+        if 'action:' not in action_string:
+            raise ValueError(f"Invalid action string: {action_string}")
 
-        action_name = action_dict.get("action") or "NoOp"
+        payload = action_string.split('action:', 1)[1].strip()
+        if not payload:
+            return Action(name='NoOp', args=[])
+
+        tokens = shlex.split(payload)
+        if not tokens:
+            return Action(name='NoOp', args=[])
+
+        action_name = tokens[0]
         args: List[str] = []
 
-        object_id = action_dict.get("objectId")
-        if object_id:
-            args.append(str(object_id).strip())
+        idx = 1
+        while idx < len(tokens):
+            token = tokens[idx]
+            next_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+
+            if next_token and next_token.isdigit():
+                args.append(f"{token}.{next_token}")
+                idx += 2
+            else:
+                args.append(token)
+                idx += 1
 
         return Action(name=action_name, args=args)
 
@@ -51,7 +67,7 @@ class CTLParser:
             
         return State(objects_state, proposition_list)
     
-    def to_tree_traj(self, traj_data: List[Union[Dict[str, List[str]], Dict[str, Any]]]) -> TrajectoryTree:
+    def to_tree_traj(self, traj_data: List[Union[Dict[str, List[str]], str]]) -> TrajectoryTree:
         """Convert trajectory data into a TrajectoryTree object."""
         root_state = self.parse_state(traj_data[0])
         tree = TrajectoryTree(root_state)
@@ -76,7 +92,7 @@ class CTLParser:
         Sort nodes and edges alphabetically in the JSON data.
         
         Args:
-            data (list): List containing alternating state dictionaries and action dicts
+            data (list): List containing alternating state dictionaries and action strings
             
         Returns:
             list: Updated data with sorted nodes and edges
@@ -98,7 +114,7 @@ class CTLParser:
                     
                 sorted_data.append(sorted_item)
             else:
-                # This is an action dict, keep as is
+                # This is an action string, keep as is
                 sorted_data.append(item)
         
         return sorted_data
@@ -109,7 +125,7 @@ class CTLParser:
             traj_data = self._sort_json_data(json.load(file))
         return self.to_tree_traj(traj_data)
     
-    def parse_from_data(self, traj_data: List[Union[Dict[str, List[str]], Dict[str, Any]]]) -> TrajectoryTree:
+    def parse_from_data(self, traj_data: List[Union[Dict[str, List[str]], str]]) -> TrajectoryTree:
         """Parse trajectory data from loaded data."""
         return self.to_tree_traj(traj_data)
 

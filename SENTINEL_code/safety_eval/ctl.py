@@ -4,7 +4,6 @@ from typing import Optional, Union, Sequence, List, Set, Dict, Tuple, Any
 import uuid
 from .tree_traj import Proposition, Action, State, TrajectoryTree, TrajectoryNode, visualize_trajectory_tree
 from collections import deque
-import re
 
 def build_id_to_name_dict(objs: List[str]):
     import re
@@ -169,24 +168,12 @@ class CTLPrimitive(CTLExpression):
     def __str__(self):
         return str(self.prop_or_action)
 
-    _SUFFIX_VAR_RE = re.compile(r"^(?P<base>.+)_(?P<suffix>[0-9]+)$")
-
     def ground(self, variable_mapping: Dict[str, str]):
-        def _bind_arg(arg: str) -> str:
-            match = self._SUFFIX_VAR_RE.match(arg)
-            if match:
-                suffix = match.group("suffix")
-                return variable_mapping.get(suffix, arg)
-            return variable_mapping.get(arg, arg)
-
         if self.is_proposition:
             base = self.prop_or_action if isinstance(self.prop_or_action, Proposition) else Proposition(self.prop_or_action.name, list(self.prop_or_action.args))
-            bound_args = [_bind_arg(arg) for arg in base.args]
-            if base.name == "NEAR":
-                bound_args = sorted(bound_args)
-            return CTLPrimitive(Proposition(base.name, bound_args))
+            return CTLPrimitive(Proposition(base.name, [variable_mapping.get(arg, arg) for arg in base.args]))
         elif self.is_action:
-            return CTLPrimitive(Action(self.prop_or_action.name, [_bind_arg(arg) for arg in self.prop_or_action.args]))
+            return CTLPrimitive(Action(self.prop_or_action.name, [variable_mapping.get(arg, arg) for arg in self.prop_or_action.args]))
 
     def eval_state(self, state: State, action: Optional[Action], variable_mapping: Dict[str, str]) -> bool:
         ground_self = self.ground(variable_mapping)
