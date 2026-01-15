@@ -101,16 +101,16 @@ def handle_implication_pattern(constraint: SafetyConstraint):
 def parse_formula(formula: str):
     formula = formula.strip()
 
-    if formula.startswith("not(") and formula.endswith(")"):
+    if formula.startswith("NOT(") and formula.endswith(")"):
         inner = formula[4:-1]
         return CTLNot(parse_formula(inner))
 
-    if " and " in formula:
-        parts = [part.strip() for part in formula.split(" and ")]
+    if " AND " in formula:
+        parts = [part.strip() for part in formula.split(" AND ")]
         return CTLAnd([parse_formula(part) for part in parts])
 
-    if " or " in formula:
-        parts = [part.strip() for part in formula.split(" or ")]
+    if " OR " in formula:
+        parts = [part.strip() for part in formula.split(" OR ")]
         return CTLOr([parse_formula(part) for part in parts])
 
     return parse_atomic_proposition(formula)
@@ -148,8 +148,8 @@ def parse_atomic_proposition(prop_str: str):
 
 
 def gather_trace_files(base_dir: Path) -> List[Path]:
-    """Collect r0_*.json trace files recursively under base_dir."""
-    return sorted(base_dir.rglob("r0_*.json"))
+    """Collect *.json trace files recursively under base_dir."""
+    return sorted(base_dir.rglob("*.json"))
 
 
 def load_constraints_from_json(path: Path) -> List[SafetyConstraint]:

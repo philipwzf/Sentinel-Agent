@@ -210,22 +210,22 @@ def _object_state_tags(obj: Dict[str, Any], inventory_ids: Iterable[str]) -> Lis
     if obj.get("isPickedUp") or obj_id_norm in inventory_ids:
         tags.append("held")
     if obj.get("openable"):
-        tags.append("open" if obj.get("isOpen") else "closed")
+        tags.append("isOpen" if obj.get("isOpen") else "isClosed")
     if obj.get("toggleable"):
-        tags.append("powered_on" if obj.get("isToggled") else "powered_off")
-    if obj.get("dirtyable"):
-        tags.append("dirty" if obj.get("isDirty") else "clean")
+        tags.append("isOn" if obj.get("isToggled") else "isOff")
+    if obj.get("dirtyable") and obj.get("isDirty"):
+        tags.append("isDirty")
     if obj.get("cookable"):
-        tags.append("cooked" if obj.get("isCooked") else "raw")
-    if obj.get("sliceable"):
-        tags.append("sliced" if obj.get("isSliced") else "unsliced")
+        tags.append("isCooked" if obj.get("isCooked") else "isRaw")
+    if obj.get("sliceable") and obj.get("isSliced"):
+        tags.append("isSliced")
 
     temperature = obj.get("temperature") or obj.get("ObjectTemperature")
     if isinstance(temperature, str) and temperature:
         tags.append(f"temp:{temperature.lower()}")
 
     if obj.get("canFillWithLiquid") and obj.get("isFilledWithLiquid"):
-        tags.append("filled")
+        tags.append("isFilledWithLiquid")
 
     return tags or ["default"]
 
