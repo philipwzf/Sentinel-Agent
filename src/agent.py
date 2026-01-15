@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import time
@@ -24,7 +25,7 @@ logger = logging.getLogger("ai2thor_green")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SENTINEL_ROOT = REPO_ROOT / "SENTINEL_code"
-EXAMPLES_PATH = REPO_ROOT / "examples" / "traj_data.json"
+EXAMPLES_ROOT = REPO_ROOT / "examples"
 REWARD_CONFIG = SENTINEL_ROOT / "models" / "config" / "rewards.json"
 SAFETY_RULES = SENTINEL_ROOT / "safety_rules_object.json"
 MODEL_NAME = "ai2thor-agent"
@@ -527,15 +528,15 @@ class Agent:
             await updater.reject(new_agent_text_message(f"Missing participant role: {PURPLE_ROLE}"))
             return
 
-        if not EXAMPLES_PATH.exists():
-            await updater.reject(new_agent_text_message(f"traj_path not found: {EXAMPLES_PATH}"))
+        if not EXAMPLES_ROOT.exists():
+            await updater.reject(new_agent_text_message(f"examples path not found: {EXAMPLES_ROOT}"))
             return
         if not REWARD_CONFIG.exists():
             await updater.reject(new_agent_text_message(f"reward_config not found: {REWARD_CONFIG}"))
             return
 
         try:
-            trials = load_trials(EXAMPLES_PATH, config.num_trials)
+            trials = load_trials(EXAMPLES_ROOT, config.num_trials)
         except Exception as exc:
             await updater.reject(new_agent_text_message(f"Failed to load trials: {exc}"))
             return
@@ -745,24 +746,43 @@ class Agent:
 
 
 def load_trials(path: Path, num_trials: int) -> list[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    if path.is_file():
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
 
-    if isinstance(payload, list):
-        base_trials = payload
+        if isinstance(payload, list):
+            base_trials = payload
+        else:
+            base_trials = [payload]
+
+        if not base_trials:
+            raise ValueError(f"{path} contains no trials")
+
+        selected = [copy.deepcopy(base_trials[i % len(base_trials)]) for i in range(num_trials)]
     else:
-        base_trials = [payload]
+        traj_files = sorted(path.rglob("traj_data.json"))
+        if not traj_files:
+            raise ValueError(f"No traj_data.json files found under {path}")
 
-    if not base_trials:
-        raise ValueError("examples/traj_data.json contains no trials")
+        if num_trials <= len(traj_files):
+            selected_files = random.sample(traj_files, k=num_trials)
+        else:
+            selected_files = [random.choice(traj_files) for _ in range(num_trials)]
+
+        selected = []
+        for file_path in selected_files:
+            with file_path.open("r", encoding="utf-8") as handle:
+                selected.append(json.load(handle))
 
     trials: list[dict[str, Any]] = []
     used_ids: set[str] = set()
-    for idx in range(num_trials):
-        trial_data = copy.deepcopy(base_trials[idx % len(base_trials)])
-        trial_id = str(trial_data.get("task_id") or f"trial_{idx + 1}")
+    for idx, trial_data in enumerate(selected, start=1):
+        if not isinstance(trial_data, dict):
+            raise ValueError(f"Invalid trial payload at index {idx}")
+        trial_data = copy.deepcopy(trial_data)
+        trial_id = str(trial_data.get("task_id") or f"trial_{idx}")
         if trial_id in used_ids:
-            trial_id = f"{trial_id}_{idx + 1}"
+            trial_id = f"{trial_id}_{idx}"
         trial_data["task_id"] = trial_id
         used_ids.add(trial_id)
         trials.append(trial_data)
