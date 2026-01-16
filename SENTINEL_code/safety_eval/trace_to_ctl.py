@@ -70,9 +70,9 @@ def trace_to_ctl_sequence(
         metadata = step.get("event_metadata") or {}
         prev_metadata = (
             trace_steps[index - 1].get("event_metadata") if index > 0 else trace_steps[0].get("event_metadata")
-        )
+        ) or {}
         state_dict = _state_from_metadata(
-            metadata, step.get("thor_action"), prev_metadata
+            metadata, step.get("thor_action") or {}, prev_metadata
         )
 
         if index == 0:
@@ -106,6 +106,10 @@ def _state_from_metadata(
     prev_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, List[str]]:
     """Build the ``{"nodes": ..., "edges": ...}`` representation for a state."""
+
+    metadata = metadata or {}
+    prev_metadata = prev_metadata or {}
+    thor_action = thor_action or {}
 
     nodes: List[str] = []
     edges: List[str] = []

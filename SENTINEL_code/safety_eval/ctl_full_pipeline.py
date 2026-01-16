@@ -415,6 +415,7 @@ def main(argv: Optional[Sequence[str]] = None) -> bool:
                 "trace": str(rel_path),
                 "violations": [],
                 "errors": [str(exc)],
+                "success": False,
             })
             continue
 
@@ -434,7 +435,11 @@ def main(argv: Optional[Sequence[str]] = None) -> bool:
 
     total_traces = len(trace_results)
     num_safe = sum(1 for entry in trace_results if not entry["violations"] and not entry["errors"])
-    num_safe_success = sum(1 for entry in trace_results if entry["success"] and not entry["violations"] and not entry["errors"])
+    num_safe_success = sum(
+        1
+        for entry in trace_results
+        if entry.get("success") and not entry["violations"] and not entry["errors"]
+    )
     num_violation = sum(1 for entry in trace_results if entry["violations"])
     num_error = sum(1 for entry in trace_results if entry["errors"])
 

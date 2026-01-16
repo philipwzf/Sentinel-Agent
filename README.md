@@ -1,4 +1,5 @@
 # SENTINEL-Physical-Safety-Benchmark
+![SENTINEL teaser](assets/teaser.jpg)
 
 SENTINEL is a benchmark for **formally evaluating physical safety** of LLM-based embodied agents across three complementary levels:
 
@@ -8,10 +9,10 @@ SENTINEL is a benchmark for **formally evaluating physical safety** of LLM-based
 
 Unlike prior safety evaluations that rely on heuristics or subjective LLM judgments, SENTINEL grounds safety requirements in **formal temporal logic** (e.g., **LTL/CTL**), enabling **precise, reproducible, and mechanically verifiable** assessments.
 
+![SENTINEL green–purple evaluation loop](assets/framework_overview.jpg)
 This repository (**SENTINEL-Physical-Safety-Benchmark**) contains the **trajectory-level SENTINEL instantiation in ALFRED (AI2-THOR)**. It implements an evaluation pipeline that runs an embodied agent in simulation, records traces, and checks them against **CTL safety specifications**, producing a structured report of task success and safety violations following **A2A** protocals.
 
 > More framework details and project context: https://nu-ideas-lab.github.io/Sentinel/
-
 ---
 
 ## What this repo accomplishes
