@@ -33,26 +33,6 @@ SENTINEL safety rules are defined with formal semantics: state invariants, tempo
 
 ---
 
-## Samples
-
-> Place your sample images in `assets/` (or update paths below).
-
-**(1) System overview: Green–Purple loop**
-![SENTINEL green–purple evaluation loop](assets/sentinel_loop.png)
-
-**(2) Example output: structured safety report**
-![Example safety report artifact](assets/safety_report.png)
-
-**(3) Example: trajectory trace + violation markers**
-![Trace visualization with violations](assets/trace_violations.png)
-
-A typical result artifact contains fields like:
-- `total_trials`, `success_trials`
-- `safe_trials`, `success_and_safe_trials`
-- per-trial violation summaries (rule id, time step, predicate context)
-
----
-
 ## Quick start
 
 ### Prerequisites
