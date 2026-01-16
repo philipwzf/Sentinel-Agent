@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 from safety_eval.collision import AABB, collision_from_metadata
-from gen_safety.constants import MICROWAVE_SAFE_MATERIALS
+
+MICROWAVE_SAFE_MATERIALS = [
+    "Ceramic",
+    "Glass",
+    "Food",
+    "Organic",
+]
 
 _COLLISION_PATTERNS = {
     "NAVIGATION": (
@@ -32,7 +38,7 @@ _COLLISION_PATTERNS = {
 def _collision_from_error(message: Optional[str]) -> Optional[str]:
     """Return a collision type label if the error message matches known patterns."""
 
-    text = message.strip().lower()
+    text = message.strip().lower() if message else ""
     if not text:
         return None
 
